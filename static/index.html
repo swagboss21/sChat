@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Model AI Research Tool</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            line-height: 1.6;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #ffffff;
+            font-size: 2em;
+        }
+
+        .input-section {
+            background: #1a1a1a;
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            border: 1px solid #2a2a2a;
+        }
+
+        .model-selector {
+            margin-bottom: 20px;
+        }
+
+        .model-selector h3 {
+            margin-bottom: 12px;
+            color: #ffffff;
+            font-size: 1.1em;
+        }
+
+        .models-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 12px;
+        }
+
+        .model-option {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            background: #252525;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .model-option:hover {
+            background: #2f2f2f;
+        }
+
+        .model-option input[type="checkbox"] {
+            margin-right: 10px;
+            cursor: pointer;
+            width: 18px;
+            height: 18px;
+        }
+
+        .model-option label {
+            cursor: pointer;
+            flex: 1;
+            color: #e0e0e0;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 15px;
+            background: #252525;
+            border: 1px solid #3a3a3a;
+            border-radius: 8px;
+            color: #e0e0e0;
+            font-size: 15px;
+            resize: vertical;
+            font-family: inherit;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #4a90e2;
+        }
+
+        .button-container {
+            margin-top: 15px;
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        button {
+            padding: 12px 30px;
+            background: #4a90e2;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover:not(:disabled) {
+            background: #357abd;
+        }
+
+        button:disabled {
+            background: #2a5a8a;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #888;
+            font-size: 18px;
+        }
+
+        .spinner {
+            border: 3px solid #2a2a2a;
+            border-top: 3px solid #4a90e2;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .results-section {
+            margin-top: 30px;
+        }
+
+        .aggregated-response {
+            background: #1a1a1a;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            border: 1px solid #2a2a2a;
+        }
+
+        .aggregated-response h2 {
+            color: #4a90e2;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+
+        .aggregated-content {
+            color: #e0e0e0;
+            white-space: pre-wrap;
+            line-height: 1.8;
+        }
+
+        .individual-responses {
+            background: #1a1a1a;
+            border-radius: 12px;
+            border: 1px solid #2a2a2a;
+            overflow: hidden;
+        }
+
+        .individual-header {
+            padding: 20px;
+            background: #252525;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+        }
+
+        .individual-header:hover {
+            background: #2a2a2a;
+        }
+
+        .individual-header h3 {
+            color: #ffffff;
+            font-size: 1.2em;
+        }
+
+        .toggle-icon {
+            color: #888;
+            font-size: 1.2em;
+            transition: transform 0.3s;
+        }
+
+        .toggle-icon.open {
+            transform: rotate(180deg);
+        }
+
+        .individual-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+
+        .individual-content.open {
+            max-height: 5000px;
+        }
+
+        .model-response {
+            padding: 25px;
+            border-top: 1px solid #2a2a2a;
+        }
+
+        .model-response h4 {
+            color: #4a90e2;
+            margin-bottom: 8px;
+            font-size: 1.1em;
+        }
+
+        .model-info {
+            color: #888;
+            font-size: 0.9em;
+            margin-bottom: 15px;
+        }
+
+        .model-text {
+            color: #d0d0d0;
+            white-space: pre-wrap;
+            line-height: 1.7;
+        }
+
+        .error {
+            color: #ff6b6b;
+            background: #2a1a1a;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 20px;
+            border: 1px solid #4a2a2a;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔬 Multi-Model AI Research Tool</h1>
+        <p style="text-align: center; color: #4a90e2; margin-bottom: 20px;">🌐 Web Search Enabled - All models search the internet in real-time</p>
+
+        <div class="input-section">
+            <div class="model-selector">
+                <h3>Select Models:</h3>
+                <div class="models-grid">
+                    <div class="model-option">
+                        <input type="checkbox" id="model-gpt4o" value="openai/gpt-4o:online" checked>
+                        <label for="model-gpt4o">GPT-4o 🌐</label>
+                    </div>
+                    <div class="model-option">
+                        <input type="checkbox" id="model-claude" value="anthropic/claude-sonnet-4.5:online" checked>
+                        <label for="model-claude">Claude Sonnet 4.5 🌐</label>
+                    </div>
+                    <div class="model-option">
+                        <input type="checkbox" id="model-perplexity" value="perplexity/sonar-pro" checked>
+                        <label for="model-perplexity">Perplexity Sonar Pro 🌐</label>
+                    </div>
+                    <div class="model-option">
+                        <input type="checkbox" id="model-grok" value="x-ai/grok-4:online" checked>
+                        <label for="model-grok">Grok 4 🌐</label>
+                    </div>
+                    <div class="model-option">
+                        <input type="checkbox" id="model-llama" value="meta-llama/llama-3.1-70b-instruct:online" checked>
+                        <label for="model-llama">Llama 3.1 70B 🌐</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="model-selector" style="margin-top: 20px;">
+                <h3>Aggregator Model:</h3>
+                <select id="aggregatorSelect" style="width: 100%; padding: 12px; background: #252525; border: 1px solid #3a3a3a; border-radius: 8px; color: #e0e0e0; font-size: 15px; cursor: pointer;">
+                    <option value="anthropic/claude-sonnet-4.5:online">Claude Sonnet 4.5 🌐 (Best Reasoning)</option>
+                    <option value="openai/gpt-4o:online">GPT-4o 🌐</option>
+                    <option value="perplexity/sonar-pro">Perplexity Sonar Pro 🌐</option>
+                    <option value="x-ai/grok-4:online">Grok 4 🌐</option>
+                    <option value="meta-llama/llama-3.1-70b-instruct:online">Llama 3.1 70B 🌐</option>
+                    <option value="deepseek/deepseek-chat:online">DeepSeek Chat 🌐 (Synthesis Only)</option>
+                </select>
+                <p style="color: #888; font-size: 0.9em; margin-top: 8px;">This model will synthesize all responses into the final analysis</p>
+            </div>
+
+            <textarea
+                id="promptInput"
+                placeholder="Enter your research question or prompt here..."
+                style="margin-top: 20px;"
+            ></textarea>
+
+            <div class="button-container" style="gap: 10px;">
+                <button id="optimizeButton" onclick="optimizePrompt()" style="background: #6b5ce7;">
+                    🔧 Optimize Prompt
+                </button>
+                <button id="sendButton" onclick="sendQuery()">Send Query</button>
+            </div>
+        </div>
+
+        <div id="loadingSection" class="loading hidden">
+            <div class="spinner"></div>
+            <p>Querying models and synthesizing responses...</p>
+        </div>
+
+        <div id="errorSection" class="error hidden"></div>
+
+        <div id="resultsSection" class="results-section hidden">
+            <div class="aggregated-response">
+                <h2>📊 Synthesized Intelligence</h2>
+                <div id="aggregatedContent" class="aggregated-content"></div>
+            </div>
+
+            <div class="individual-responses">
+                <div class="individual-header" onclick="toggleIndividual()">
+                    <h3>Individual Model Responses</h3>
+                    <span id="toggleIcon" class="toggle-icon">▼</span>
+                </div>
+                <div id="individualContent" class="individual-content">
+                    <!-- Individual responses will be inserted here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State management for prompt optimization
+        let originalPrompt = '';
+        let isOptimized = false;
+
+        function toggleIndividual() {
+            const content = document.getElementById('individualContent');
+            const icon = document.getElementById('toggleIcon');
+            content.classList.toggle('open');
+            icon.classList.toggle('open');
+        }
+
+        async function optimizePrompt() {
+            const promptInput = document.getElementById('promptInput');
+            const prompt = promptInput.value.trim();
+
+            if (!prompt) {
+                alert('Please enter a prompt first');
+                return;
+            }
+
+            // If already optimized, revert to original
+            if (isOptimized) {
+                promptInput.value = originalPrompt;
+                isOptimized = false;
+                document.getElementById('optimizeButton').innerHTML = '🔧 Optimize Prompt';
+                document.getElementById('optimizeButton').style.background = '#6b5ce7';
+                return;
+            }
+
+            // Save original and optimize
+            originalPrompt = prompt;
+            const optimizeButton = document.getElementById('optimizeButton');
+
+            // Update button to loading state
+            optimizeButton.disabled = true;
+            optimizeButton.innerHTML = '⏳ Optimizing...';
+
+            try {
+                const response = await fetch('/api/optimize', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ prompt })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Optimization failed');
+                }
+
+                const data = await response.json();
+
+                // Update textarea with optimized prompt
+                promptInput.value = data.optimized;
+                isOptimized = true;
+
+                // Change button to "Back" mode
+                optimizeButton.innerHTML = '⏮ Back to Original';
+                optimizeButton.style.background = '#e67e22';
+
+            } catch (error) {
+                console.error('Optimization error:', error);
+                alert('Failed to optimize prompt: ' + error.message);
+            } finally {
+                optimizeButton.disabled = false;
+            }
+        }
+
+        // Reset optimization state when user manually edits
+        document.addEventListener('DOMContentLoaded', () => {
+            const promptInput = document.getElementById('promptInput');
+            let lastValue = promptInput.value;
+
+            promptInput.addEventListener('input', () => {
+                if (isOptimized && promptInput.value !== lastValue) {
+                    // User manually edited, disable back button
+                    isOptimized = false;
+                    originalPrompt = '';
+                    document.getElementById('optimizeButton').innerHTML = '🔧 Optimize Prompt';
+                    document.getElementById('optimizeButton').style.background = '#6b5ce7';
+                }
+                lastValue = promptInput.value;
+            });
+        });
+
+        async function sendQuery() {
+            // Get selected models
+            const checkboxes = document.querySelectorAll('input[type="checkbox"]:checked');
+            const models = Array.from(checkboxes).map(cb => cb.value);
+
+            // Get aggregator model
+            const aggregator = document.getElementById('aggregatorSelect').value;
+
+            // Get prompt
+            const prompt = document.getElementById('promptInput').value.trim();
+
+            // Validate inputs
+            if (!prompt) {
+                showError('Please enter a prompt');
+                return;
+            }
+
+            if (models.length === 0) {
+                showError('Please select at least one model');
+                return;
+            }
+
+            // Show loading state
+            document.getElementById('loadingSection').classList.remove('hidden');
+            document.getElementById('resultsSection').classList.add('hidden');
+            document.getElementById('errorSection').classList.add('hidden');
+            document.getElementById('sendButton').disabled = true;
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        prompt: prompt,
+                        models: models,
+                        aggregator: aggregator
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Request failed');
+                }
+
+                const data = await response.json();
+                displayResults(data);
+
+            } catch (error) {
+                showError(`Error: ${error.message}`);
+            } finally {
+                document.getElementById('loadingSection').classList.add('hidden');
+                document.getElementById('sendButton').disabled = false;
+            }
+        }
+
+        function displayResults(data) {
+            // Display aggregated response
+            document.getElementById('aggregatedContent').textContent = data.aggregated;
+
+            // Display individual responses
+            const individualContent = document.getElementById('individualContent');
+            individualContent.innerHTML = '';
+
+            data.individual.forEach(resp => {
+                const div = document.createElement('div');
+                div.className = 'model-response';
+
+                const modelName = resp.model.split('/')[1] || resp.model;
+
+                div.innerHTML = `
+                    <h4>${modelName}</h4>
+                    <div class="model-info">Tokens: ${resp.tokens}</div>
+                    <div class="model-text">${escapeHtml(resp.response)}</div>
+                `;
+
+                individualContent.appendChild(div);
+            });
+
+            // Show results
+            document.getElementById('resultsSection').classList.remove('hidden');
+        }
+
+        function showError(message) {
+            const errorSection = document.getElementById('errorSection');
+            errorSection.textContent = message;
+            errorSection.classList.remove('hidden');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Allow Enter key to submit (with Shift+Enter for new line)
+        document.getElementById('promptInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendQuery();
+            }
+        });
+    </script>
+</body>
+</html>
