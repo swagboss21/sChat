@@ -5,7 +5,7 @@ A FastAPI-based web application that queries multiple AI models in parallel via 
 
 ---
 
-## Current Configuration (as of Nov 11, 2025)
+## Current Configuration (as of Nov 14, 2025)
 
 ### Models (5 Initial Prompt Models)
 All models use `:online` suffix for real-time web search:
@@ -14,7 +14,7 @@ All models use `:online` suffix for real-time web search:
 2. **anthropic/claude-sonnet-4.5:online** - Best reasoning model with web search
 3. **perplexity/sonar-pro** - Native web search and citations (already has built-in search)
 4. **x-ai/grok-4:online** - xAI's Grok with web + X/Twitter search
-5. **meta-llama/llama-3.1-70b-instruct:online** - Open source model with web search
+5. **google/gemini-2.0-flash-001:online** - Google's latest Gemini 2.0 model with web search
 
 ### Aggregator Models (6 Options)
 All available in dropdown with web search enabled:
@@ -22,13 +22,13 @@ All available in dropdown with web search enabled:
 - openai/gpt-4o:online
 - perplexity/sonar-pro
 - x-ai/grok-4:online
-- meta-llama/llama-3.1-70b-instruct:online
+- google/gemini-2.0-flash-001:online
 - deepseek/deepseek-chat:online (synthesis only, not in initial prompts)
 
 ### Token Limits
 - **Individual models**: 4,000 max_tokens
 - **Aggregator**: 5,000 max_tokens
-- **Timeout**: 60 seconds per model (120 seconds for Grok due to X/Twitter integration)
+- **Timeout**: 60 seconds per model (120 seconds for Grok and Claude due to X/Twitter integration and deep reasoning)
 
 ### Cost Estimate
 - **~$0.50-0.80 per request** (5 models + aggregation)
@@ -438,6 +438,30 @@ From Context7 research on 2025-11-11:
   - Timestamp
 - 🎯 Purpose: Compare test results, track model performance, analyze optimization quality over time
 
+### 2025-11-14 (Bug Fixes & Model Swap)
+**Fixed critical timeout and UI issues, replaced Llama with Gemini:**
+- ✅ **Claude timeout fix**: Increased Claude Sonnet 4.5 timeout from 60s to 120s (matches Grok)
+  - Claude was timing out on complex research queries
+  - Now has adequate time for deep reasoning and web search
+  - Updated logic: `timeout = 120.0 if "grok" in model.lower() or "claude" in model.lower() else 60.0`
+- ✅ **UI scrolling fix**: Removed max-height limit on individual responses
+  - Changed from `max-height: 5000px` to `max-height: none`
+  - Fixes issue where responses were cut off and couldn't scroll to see all models
+  - Users can now view all 5 model responses without truncation
+- ✅ **Model replacement**: Swapped Llama 3.1 70B for Gemini 2.0 Flash
+  - **Removed**: `meta-llama/llama-3.1-70b-instruct:online`
+  - **Added**: `google/gemini-2.0-flash-001:online` (verified working with test script)
+  - Adds Google provider diversity (now using OpenAI, Anthropic, Perplexity, xAI, Google)
+  - Gemini 2.0 brings multimodal capabilities and Google Search integration
+  - Pricing: $0.10 input / $0.40 output per 1M tokens (cheaper than Gemini 2.5)
+  - Testing confirmed: ✅ Works with `:online` suffix, ✅ Returns current November 2025 data with citations
+  - Added model note: "multimodal capabilities, Google search"
+- ✅ **Gemini model troubleshooting**: Created test_gemini_models.py to verify correct model ID
+  - Tested 3 Gemini variants: `gemini-2.0-flash-exp:free` (rate limited), `gemini-2.0-flash-001` (✅ working), `gemini-flash-1.5-exp` (404)
+  - Confirmed `google/gemini-2.0-flash-001:online` as stable, working model
+- ✅ **Updated frontend**: Replaced Llama checkbox/dropdown with Gemini 2.0 Flash in UI
+- ✅ **Updated documentation**: Reflected all changes in CLAUDE.md configuration section
+
 ---
 
 ## Optimization Analysis & Recommendations
@@ -588,8 +612,8 @@ model_notes = {
 
 **Built with**: Claude Code (Anthropic)
 **OpenRouter API**: https://openrouter.ai
-**Models Used**: OpenAI, Anthropic, Perplexity, xAI, Meta
+**Models Used**: OpenAI, Anthropic, Perplexity, xAI, Google
 
 ---
 
-*Last Updated: November 11, 2025*
+*Last Updated: November 14, 2025*

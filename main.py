@@ -37,7 +37,7 @@ AVAILABLE_MODELS = [
     "anthropic/claude-sonnet-4.5:online",
     "perplexity/sonar-pro",  # Already has built-in web search
     "x-ai/grok-4:online",
-    "meta-llama/llama-3.1-70b-instruct:online"
+    "google/gemini-2.0-flash-001:online"
 ]
 
 # Available aggregator models (can use DeepSeek for synthesis only)
@@ -65,8 +65,8 @@ class ChatResponse(BaseModel):
 
 async def query_model(model: str, prompt: str) -> Dict:
     """Query a single model with timeout and error handling"""
-    # Grok models need more time for X/Twitter search integration
-    timeout = 120.0 if "grok" in model.lower() else 60.0
+    # Grok and Claude need more time for X/Twitter search and deep reasoning
+    timeout = 120.0 if "grok" in model.lower() or "claude" in model.lower() else 60.0
 
     try:
         response = await asyncio.wait_for(
@@ -121,7 +121,8 @@ async def aggregate_responses(query: str, responses: List[Dict], aggregator_mode
     model_notes = {
         "anthropic/claude-sonnet-4.5:online": " (strong reasoning, detailed analysis)",
         "x-ai/grok-4:online": " (real-time X/Twitter access)",
-        "perplexity/sonar-pro": " (native web search with citations)"
+        "perplexity/sonar-pro": " (native web search with citations)",
+        "google/gemini-2.0-flash-001:online": " (multimodal capabilities, Google search)"
     }
 
     formatted_responses = ""
