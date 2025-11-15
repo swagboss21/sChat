@@ -1,7 +1,11 @@
+# ============================================
+# IMPORTS & INITIALIZATION
+# ============================================
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 import asyncio
@@ -10,11 +14,18 @@ from dotenv import load_dotenv
 from typing import List, Dict, Optional
 import uuid
 import time
+import json
+from pathlib import Path
+from datetime import datetime
 
 # Load environment variables
 load_dotenv()
 
 app = FastAPI()
+
+# ============================================
+# CONFIGURATION
+# ============================================
 
 # Global dictionary to track query status for real-time updates
 # Format: {request_id: {models: {model_name: {status, start_time, end_time, error}}, aggregation_status}}
@@ -57,6 +68,10 @@ AGGREGATOR_MODELS = AVAILABLE_MODELS + ["deepseek/deepseek-chat:online"]
 # Aggregation model (default with web search enabled)
 AGGREGATOR_MODEL = "anthropic/claude-sonnet-4.5:online"
 
+# ============================================
+# DATA MODELS
+# ============================================
+
 class ChatRequest(BaseModel):
     prompt: str
     models: List[str]
@@ -75,10 +90,65 @@ class ChatResponse(BaseModel):
     individual: List[ModelResponse]
     request_id: str  # For frontend to poll status
 
+# ============================================
+# UTILITY FUNCTIONS
+# ============================================
+
+def log_query(prompt: str, models: List[str], aggregator: str, raw_responses: List[Dict], aggregated: str) -> None:
+    """Log a completed query to query_log.json"""
+    log_file = Path("query_log.json")
+
+    try:
+        logs = json.loads(log_file.read_text()) if log_file.exists() else []
+    except:
+        logs = []
+
+    logs.append({
+        "timestamp": datetime.now().isoformat(),
+        "user_prompt": prompt,
+        "models_used": models,
+        "aggregator": aggregator,
+        "individual_responses": [
+            {
+                "model": r["model"],
+                "response": r["response"],
+                "tokens": r["tokens"],
+                "error": r["error"]
+            }
+            for r in raw_responses
+        ],
+        "aggregated_response": aggregated,
+        "total_tokens": sum(r["tokens"] for r in raw_responses)
+    })
+
+    log_file.write_text(json.dumps(logs, indent=2))
+
+def log_optimization(original: str, optimized: str, tokens: int) -> None:
+    """Log a prompt optimization to optimization_log.json"""
+    log_file = Path("optimization_log.json")
+
+    try:
+        logs = json.loads(log_file.read_text()) if log_file.exists() else []
+    except:
+        logs = []
+
+    logs.append({
+        "timestamp": datetime.now().isoformat(),
+        "original": original,
+        "optimized": optimized,
+        "model": "anthropic/claude-3.5-haiku",
+        "tokens": tokens
+    })
+
+    log_file.write_text(json.dumps(logs, indent=2))
+
+# ============================================
+# CORE BUSINESS LOGIC
+# ============================================
+
 async def query_model(model: str, prompt: str, request_id: str = None) -> Dict:
     """Query a single model with timeout and error handling, tracking status in real-time"""
-    # Grok and Claude need more time for X/Twitter search and deep reasoning
-    timeout = 120.0 if "grok" in model.lower() or "claude" in model.lower() else 60.0
+    timeout = 120.0  # All models get 2 minutes (most complete in ~10 seconds)
 
     start_time = time.time()
 
@@ -248,38 +318,9 @@ Rules: No preambles. Start with ## KEY CONSENSUS. Show model attribution to high
     except Exception as e:
         return f"Error during aggregation: {str(e)}"
 
-@app.get("/api/status/{request_id}")
-async def get_status(request_id: str):
-    """
-    Get real-time status of a query in progress
-    Returns current state of all models and aggregation
-    """
-    if request_id not in query_status:
-        raise HTTPException(status_code=404, detail="Request ID not found")
-
-    status_data = query_status[request_id]
-    current_time = time.time()
-
-    # Build response with elapsed times
-    models_status = {}
-    for model, data in status_data["models"].items():
-        elapsed = None
-        if data["start_time"]:
-            if data["end_time"]:
-                elapsed = round(data["end_time"] - data["start_time"], 1)
-            else:
-                elapsed = round(current_time - data["start_time"], 1)
-
-        models_status[model] = {
-            "status": data["status"],
-            "elapsed": elapsed,
-            "error": data["error"]
-        }
-
-    return {
-        "models": models_status,
-        "aggregation_status": status_data["aggregation_status"]
-    }
+# ============================================
+# BACKGROUND PROCESSING
+# ============================================
 
 async def process_query_background(request_id: str, prompt: str, models: List[str], aggregator: str):
     """Background task to process the actual query"""
@@ -322,93 +363,18 @@ async def process_query_background(request_id: str, prompt: str, models: List[st
         }
 
         # Log the query
-        import json
-        from pathlib import Path
-        from datetime import datetime
-        log_file = Path("query_log.json")
-
-        try:
-            logs = json.loads(log_file.read_text()) if log_file.exists() else []
-        except:
-            logs = []
-
-        logs.append({
-            "timestamp": datetime.now().isoformat(),
-            "user_prompt": prompt,
-            "models_used": models,
-            "aggregator": aggregator,
-            "individual_responses": [
-                {
-                    "model": r["model"],
-                    "response": r["response"],
-                    "tokens": r["tokens"],
-                    "error": r["error"]
-                }
-                for r in raw_responses
-            ],
-            "aggregated_response": aggregated,
-            "total_tokens": sum(r["tokens"] for r in raw_responses)
-        })
-
-        log_file.write_text(json.dumps(logs, indent=2))
+        log_query(prompt, models, aggregator, raw_responses, aggregated)
 
     except Exception as e:
         query_results[request_id] = {"error": str(e)}
 
-@app.post("/api/chat")
-async def chat(request: ChatRequest, background_tasks: BackgroundTasks):
-    """
-    Main chat endpoint - returns request_id immediately and processes in background
-    """
+# ============================================
+# API ENDPOINTS
+# ============================================
 
-    # Validate models
-    invalid_models = [m for m in request.models if m not in AVAILABLE_MODELS]
-    if invalid_models:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid models: {invalid_models}"
-        )
-
-    if not request.models:
-        raise HTTPException(
-            status_code=400,
-            detail="At least one model must be selected"
-        )
-
-    # Generate unique request ID for status tracking
-    request_id = str(uuid.uuid4())
-
-    # Initialize status tracking for this request
-    query_status[request_id] = {
-        "models": {model: {"status": "pending", "start_time": None, "end_time": None, "error": None}
-                   for model in request.models},
-        "aggregation_status": "pending"
-    }
-
-    # Start background processing
-    background_tasks.add_task(process_query_background, request_id, request.prompt, request.models, request.aggregator)
-
-    # Return request_id immediately so frontend can start polling
-    return {"request_id": request_id}
-
-@app.get("/api/result/{request_id}")
-async def get_result(request_id: str):
-    """
-    Get the final result of a query (polls this until complete)
-    """
-    if request_id not in query_status:
-        raise HTTPException(status_code=404, detail="Request ID not found")
-
-    # Check if results are ready
-    if request_id in query_results:
-        result = query_results[request_id]
-        # Clean up after returning (optional - could keep for caching)
-        # del query_status[request_id]
-        # del query_results[request_id]
-        return result
-
-    # Results not ready yet
-    return {"status": "processing"}
+# --------------------------------------------
+# Prompt Optimization
+# --------------------------------------------
 
 @app.post("/api/optimize")
 async def optimize_prompt(request: OptimizeRequest):
@@ -416,7 +382,6 @@ async def optimize_prompt(request: OptimizeRequest):
     Optimize a user's prompt for better research results.
     Uses Claude Haiku (offline) with system date injection - NO web search needed.
     """
-    from datetime import datetime
     today = datetime.now().strftime("%B %d, %Y")  # e.g., "November 10, 2025"
 
     optimization_prompt = f"""You are a prompt optimization assistant for a multi-model AI research tool. The tool queries 5 AI models in parallel (with web search enabled) and synthesizes their responses.
@@ -497,25 +462,8 @@ EXAMPLE GOOD OUTPUT (do this):
 
         optimized = '\n'.join(cleaned_lines).strip()
 
-        # Log the optimization for comparison/debugging
-        import json
-        from pathlib import Path
-        log_file = Path("optimization_log.json")
-
-        try:
-            logs = json.loads(log_file.read_text()) if log_file.exists() else []
-        except:
-            logs = []
-
-        logs.append({
-            "timestamp": datetime.now().isoformat(),
-            "original": request.prompt,
-            "optimized": optimized,
-            "model": "anthropic/claude-3.5-haiku",
-            "tokens": response.usage.total_tokens if response.usage else 0
-        })
-
-        log_file.write_text(json.dumps(logs, indent=2))
+        # Log the optimization
+        log_optimization(request.prompt, optimized, response.usage.total_tokens if response.usage else 0)
 
         return {"optimized": optimized}
 
@@ -525,11 +473,110 @@ EXAMPLE GOOD OUTPUT (do this):
             detail=f"Optimization failed: {str(e)}"
         )
 
+# --------------------------------------------
+# Main Research Flow
+# --------------------------------------------
+
+@app.post("/api/chat")
+async def chat(request: ChatRequest, background_tasks: BackgroundTasks):
+    """
+    Main chat endpoint - returns request_id immediately and processes in background
+    """
+
+    # Validate models
+    invalid_models = [m for m in request.models if m not in AVAILABLE_MODELS]
+    if invalid_models:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid models: {invalid_models}"
+        )
+
+    if not request.models:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one model must be selected"
+        )
+
+    # Generate unique request ID for status tracking
+    request_id = str(uuid.uuid4())
+
+    # Initialize status tracking for this request
+    query_status[request_id] = {
+        "models": {model: {"status": "pending", "start_time": None, "end_time": None, "error": None}
+                   for model in request.models},
+        "aggregation_status": "pending"
+    }
+
+    # Start background processing
+    background_tasks.add_task(process_query_background, request_id, request.prompt, request.models, request.aggregator)
+
+    # Return request_id immediately so frontend can start polling
+    return {"request_id": request_id}
+
+@app.get("/api/status/{request_id}")
+async def get_status(request_id: str):
+    """
+    Get real-time status of a query in progress
+    Returns current state of all models and aggregation
+    """
+    if request_id not in query_status:
+        raise HTTPException(status_code=404, detail="Request ID not found")
+
+    status_data = query_status[request_id]
+    current_time = time.time()
+
+    # Build response with elapsed times
+    models_status = {}
+    for model, data in status_data["models"].items():
+        elapsed = None
+        if data["start_time"]:
+            if data["end_time"]:
+                elapsed = round(data["end_time"] - data["start_time"], 1)
+            else:
+                elapsed = round(current_time - data["start_time"], 1)
+
+        models_status[model] = {
+            "status": data["status"],
+            "elapsed": elapsed,
+            "error": data["error"]
+        }
+
+    return {
+        "models": models_status,
+        "aggregation_status": status_data["aggregation_status"]
+    }
+
+@app.get("/api/result/{request_id}")
+async def get_result(request_id: str):
+    """
+    Get the final result of a query (polls this until complete)
+    """
+    if request_id not in query_status:
+        raise HTTPException(status_code=404, detail="Request ID not found")
+
+    # Check if results are ready
+    if request_id in query_results:
+        result = query_results[request_id]
+        # Clean up after returning (optional - could keep for caching)
+        # del query_status[request_id]
+        # del query_results[request_id]
+        return result
+
+    # Results not ready yet
+    return {"status": "processing"}
+
+# --------------------------------------------
+# Navigation
+# --------------------------------------------
+
 @app.get("/")
 async def root():
     """Redirect to static index.html"""
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/static/index.html")
+
+# ============================================
+# ENTRY POINT
+# ============================================
 
 if __name__ == "__main__":
     import uvicorn
