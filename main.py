@@ -72,8 +72,11 @@ async def query_model(model: str, prompt: str) -> Dict:
         response = await asyncio.wait_for(
             client.chat.completions.create(
                 model=model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=4000,  # Increased for full, quality responses
+                messages=[
+                    {"role": "system", "content": "Be concise and data-focused. Omit preambles, disclaimers, and process explanations. Start directly with key findings using bullet points. Cite sources inline (e.g., 'per ESPN') without full URLs. Target 300-500 words for simple queries, expand as needed for complex questions."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=4000,  # Safety net - models naturally stop when done
                 timeout=timeout
             ),
             timeout=timeout
@@ -135,46 +138,47 @@ async def aggregate_responses(query: str, responses: List[Dict], aggregator_mode
         else:
             formatted_responses += f"\n{idx}. **{model_name}**{model_note}:\n{resp['response']}\n"
 
-    aggregation_prompt = f"""You are synthesizing responses from multiple AI models that already performed web searches.
-
-DO NOT perform any web searches yourself.
-DO NOT include meta-commentary about your process (e.g., "I need to search...", "Now let me...", "Based on my searches...").
-Present ONLY the final synthesis in the format below.
+    aggregation_prompt = f"""Synthesize these AI model responses. They already performed web searches - use only their findings.
 
 Original Query: {query}
 
-Model Responses (already web-searched):
+Model Responses:
 {formatted_responses}
 
-Provide a structured synthesis following this exact format:
+Output format:
 
 ## KEY CONSENSUS
-Facts and findings that 3+ models agree on. Include specific numbers, dates, and names where applicable. Cite sources.
+2-3 bullet points max of baseline facts most models agree on. Include numbers, dates, names.
 
-## UNIQUE INSIGHTS
-Information found by ONLY 1-2 models that adds unique value:
-- Exclusive data points, statistics, or sources not mentioned by others
-- Unique URLs, documents, or social media posts (especially X/Twitter from Grok)
-- Novel angles or perspectives others missed
-DO NOT repeat information already covered in Key Consensus.
+## UNIQUE INSIGHTS BY MODEL
+What each model uniquely contributed (exclusive data, novel angles, sources only 1-2 models found):
 
-## CONTRADICTIONS
-Where models disagree on facts, predictions, or interpretations. Explain which models disagree and what evidence each provides.
+**From GPT-4o (Model 1):** [List unique findings, or "No unique insights" if overlaps with others]
 
-## ACTIONABLE INTELLIGENCE
-Concrete, specific takeaways:
-- Immediate next steps (24-72 hour timeline)
-- Key decision points to monitor
-- Business/planning implications
-- Specific people, organizations, or events to track
+**From Claude (Model 2):** [List unique findings, prioritize detailed analysis and exclusive data points]
 
-CRITICAL RULES:
-- Work ONLY with the model responses provided above
-- Do NOT search the web - the models already did that
-- Do NOT include any process commentary or explanations about what you're doing
-- Start directly with "## KEY CONSENSUS" (no preamble)
-- Do not repeat the same facts across multiple sections
-- Prioritize specificity (dates, names, numbers) and source citations from the model responses"""
+**From Perplexity (Model 3):** [List unique findings, prioritize citation quality and exclusive sources]
+
+**From Grok (Model 4):** [List unique findings, prioritize X/Twitter posts and real-time social data]
+
+**From Gemini (Model 5):** [List unique findings, prioritize Google search exclusives]
+
+## WATCH FOR
+**Next 24-72 Hours:**
+- [Immediate developments, breaking news to monitor, upcoming announcements]
+- [Specific events with dates/times]
+
+**Next 1-4 Weeks:**
+- [Short-term trends to track, upcoming decisions/votes/releases]
+- [Key metrics or indicators to monitor]
+- [People, organizations, or events to follow]
+
+## SOURCES
+Key sources cited above:
+[1] Source name
+[2] Source name
+
+Rules: No preambles. Start with ## KEY CONSENSUS. Show model attribution to highlight each model's unique value."""
 
     try:
         response = await client.chat.completions.create(
