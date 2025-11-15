@@ -1,17 +1,28 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 import asyncio
 import os
 from dotenv import load_dotenv
-from typing import List, Dict
+from typing import List, Dict, Optional
+import uuid
+import time
 
 # Load environment variables
 load_dotenv()
 
 app = FastAPI()
+
+# Global dictionary to track query status for real-time updates
+# Format: {request_id: {models: {model_name: {status, start_time, end_time, error}}, aggregation_status}}
+query_status = {}
+
+# Global dictionary to store completed query results
+# Format: {request_id: {aggregated, individual}}
+query_results = {}
 
 # Enable CORS
 app.add_middleware(
@@ -62,11 +73,23 @@ class ModelResponse(BaseModel):
 class ChatResponse(BaseModel):
     aggregated: str
     individual: List[ModelResponse]
+    request_id: str  # For frontend to poll status
 
-async def query_model(model: str, prompt: str) -> Dict:
-    """Query a single model with timeout and error handling"""
+async def query_model(model: str, prompt: str, request_id: str = None) -> Dict:
+    """Query a single model with timeout and error handling, tracking status in real-time"""
     # Grok and Claude need more time for X/Twitter search and deep reasoning
     timeout = 120.0 if "grok" in model.lower() or "claude" in model.lower() else 60.0
+
+    start_time = time.time()
+
+    # Update status to "querying" if request_id provided
+    if request_id and request_id in query_status:
+        query_status[request_id]["models"][model] = {
+            "status": "querying",
+            "start_time": start_time,
+            "end_time": None,
+            "error": None
+        }
 
     try:
         response = await asyncio.wait_for(
@@ -91,6 +114,17 @@ async def query_model(model: str, prompt: str) -> Dict:
             if not tokens:
                 tokens = min(response.usage.total_tokens, 4000)
 
+        end_time = time.time()
+
+        # Update status to "completed"
+        if request_id and request_id in query_status:
+            query_status[request_id]["models"][model] = {
+                "status": "completed",
+                "start_time": start_time,
+                "end_time": end_time,
+                "error": None
+            }
+
         return {
             "model": model,
             "response": response.choices[0].message.content,
@@ -98,18 +132,42 @@ async def query_model(model: str, prompt: str) -> Dict:
             "error": None
         }
     except asyncio.TimeoutError:
+        end_time = time.time()
+        error_msg = f"Request timed out after {timeout} seconds"
+
+        # Update status to "timeout"
+        if request_id and request_id in query_status:
+            query_status[request_id]["models"][model] = {
+                "status": "timeout",
+                "start_time": start_time,
+                "end_time": end_time,
+                "error": error_msg
+            }
+
         return {
             "model": model,
             "response": "",
             "tokens": 0,
-            "error": f"Request timed out after {timeout} seconds"
+            "error": error_msg
         }
     except Exception as e:
+        end_time = time.time()
+        error_msg = str(e)
+
+        # Update status to "error"
+        if request_id and request_id in query_status:
+            query_status[request_id]["models"][model] = {
+                "status": "error",
+                "start_time": start_time,
+                "end_time": end_time,
+                "error": error_msg
+            }
+
         return {
             "model": model,
             "response": "",
             "tokens": 0,
-            "error": str(e)
+            "error": error_msg
         }
 
 async def aggregate_responses(query: str, responses: List[Dict], aggregator_model: str) -> str:
@@ -190,11 +248,117 @@ Rules: No preambles. Start with ## KEY CONSENSUS. Show model attribution to high
     except Exception as e:
         return f"Error during aggregation: {str(e)}"
 
-@app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+@app.get("/api/status/{request_id}")
+async def get_status(request_id: str):
     """
-    Main chat endpoint that queries multiple models in parallel
-    and aggregates their responses
+    Get real-time status of a query in progress
+    Returns current state of all models and aggregation
+    """
+    if request_id not in query_status:
+        raise HTTPException(status_code=404, detail="Request ID not found")
+
+    status_data = query_status[request_id]
+    current_time = time.time()
+
+    # Build response with elapsed times
+    models_status = {}
+    for model, data in status_data["models"].items():
+        elapsed = None
+        if data["start_time"]:
+            if data["end_time"]:
+                elapsed = round(data["end_time"] - data["start_time"], 1)
+            else:
+                elapsed = round(current_time - data["start_time"], 1)
+
+        models_status[model] = {
+            "status": data["status"],
+            "elapsed": elapsed,
+            "error": data["error"]
+        }
+
+    return {
+        "models": models_status,
+        "aggregation_status": status_data["aggregation_status"]
+    }
+
+async def process_query_background(request_id: str, prompt: str, models: List[str], aggregator: str):
+    """Background task to process the actual query"""
+    try:
+        # Query all models in parallel with request_id for status tracking
+        tasks = [query_model(model, prompt, request_id) for model in models]
+        raw_responses = await asyncio.gather(*tasks)
+
+        # Filter out completely failed responses but keep partial data
+        successful_responses = [r for r in raw_responses if not r["error"]]
+
+        if not successful_responses:
+            query_results[request_id] = {"error": "All model queries failed"}
+            return
+
+        # Update aggregation status to "running"
+        query_status[request_id]["aggregation_status"] = "running"
+
+        # Aggregate responses using selected aggregator model
+        aggregated = await aggregate_responses(prompt, raw_responses, aggregator)
+
+        # Update aggregation status to "completed"
+        query_status[request_id]["aggregation_status"] = "completed"
+
+        # Format individual responses
+        individual = [
+            {
+                "model": r["model"],
+                "response": r["response"] if not r["error"] else f"Error: {r['error']}",
+                "tokens": r["tokens"]
+            }
+            for r in raw_responses
+        ]
+
+        # Store results
+        query_results[request_id] = {
+            "aggregated": aggregated,
+            "individual": individual,
+            "request_id": request_id
+        }
+
+        # Log the query
+        import json
+        from pathlib import Path
+        from datetime import datetime
+        log_file = Path("query_log.json")
+
+        try:
+            logs = json.loads(log_file.read_text()) if log_file.exists() else []
+        except:
+            logs = []
+
+        logs.append({
+            "timestamp": datetime.now().isoformat(),
+            "user_prompt": prompt,
+            "models_used": models,
+            "aggregator": aggregator,
+            "individual_responses": [
+                {
+                    "model": r["model"],
+                    "response": r["response"],
+                    "tokens": r["tokens"],
+                    "error": r["error"]
+                }
+                for r in raw_responses
+            ],
+            "aggregated_response": aggregated,
+            "total_tokens": sum(r["tokens"] for r in raw_responses)
+        })
+
+        log_file.write_text(json.dumps(logs, indent=2))
+
+    except Exception as e:
+        query_results[request_id] = {"error": str(e)}
+
+@app.post("/api/chat")
+async def chat(request: ChatRequest, background_tasks: BackgroundTasks):
+    """
+    Main chat endpoint - returns request_id immediately and processes in background
     """
 
     # Validate models
@@ -211,67 +375,40 @@ async def chat(request: ChatRequest):
             detail="At least one model must be selected"
         )
 
-    # Query all models in parallel
-    tasks = [query_model(model, request.prompt) for model in request.models]
-    raw_responses = await asyncio.gather(*tasks)
+    # Generate unique request ID for status tracking
+    request_id = str(uuid.uuid4())
 
-    # Filter out completely failed responses but keep partial data
-    successful_responses = [r for r in raw_responses if not r["error"]]
+    # Initialize status tracking for this request
+    query_status[request_id] = {
+        "models": {model: {"status": "pending", "start_time": None, "end_time": None, "error": None}
+                   for model in request.models},
+        "aggregation_status": "pending"
+    }
 
-    if not successful_responses:
-        raise HTTPException(
-            status_code=500,
-            detail="All model queries failed"
-        )
+    # Start background processing
+    background_tasks.add_task(process_query_background, request_id, request.prompt, request.models, request.aggregator)
 
-    # Aggregate responses using selected aggregator model
-    aggregated = await aggregate_responses(request.prompt, raw_responses, request.aggregator)
+    # Return request_id immediately so frontend can start polling
+    return {"request_id": request_id}
 
-    # Format individual responses for the frontend
-    individual = [
-        ModelResponse(
-            model=r["model"],
-            response=r["response"] if not r["error"] else f"Error: {r['error']}",
-            tokens=r["tokens"]
-        )
-        for r in raw_responses
-    ]
+@app.get("/api/result/{request_id}")
+async def get_result(request_id: str):
+    """
+    Get the final result of a query (polls this until complete)
+    """
+    if request_id not in query_status:
+        raise HTTPException(status_code=404, detail="Request ID not found")
 
-    # Log the full query for comparison/debugging
-    import json
-    from pathlib import Path
-    from datetime import datetime
-    log_file = Path("query_log.json")
+    # Check if results are ready
+    if request_id in query_results:
+        result = query_results[request_id]
+        # Clean up after returning (optional - could keep for caching)
+        # del query_status[request_id]
+        # del query_results[request_id]
+        return result
 
-    try:
-        logs = json.loads(log_file.read_text()) if log_file.exists() else []
-    except:
-        logs = []
-
-    logs.append({
-        "timestamp": datetime.now().isoformat(),
-        "user_prompt": request.prompt,
-        "models_used": request.models,
-        "aggregator": request.aggregator,
-        "individual_responses": [
-            {
-                "model": r["model"],
-                "response": r["response"],
-                "tokens": r["tokens"],
-                "error": r["error"]
-            }
-            for r in raw_responses
-        ],
-        "aggregated_response": aggregated,
-        "total_tokens": sum(r["tokens"] for r in raw_responses)
-    })
-
-    log_file.write_text(json.dumps(logs, indent=2))
-
-    return ChatResponse(
-        aggregated=aggregated,
-        individual=individual
-    )
+    # Results not ready yet
+    return {"status": "processing"}
 
 @app.post("/api/optimize")
 async def optimize_prompt(request: OptimizeRequest):
